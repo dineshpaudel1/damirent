@@ -16,18 +16,10 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@/lib/queryClient';
 import { useAuthStore } from '@/store/auth.store';
 import { Colors } from '@/constants/theme';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      staleTime: 60_000,
-    },
-  },
-});
 
 // ── Animated Splash ───────────────────────────────────────────────────────────
 

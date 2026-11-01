@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.throttles import PaymentInitiateThrottle
 from apps.bookings.models import Booking, BookingStatusHistory, CancellationPenalty
 from services.notification_service import notify_payment_confirmed
 from .models import Payment
@@ -17,6 +18,7 @@ from . import khalti
 
 class PaymentInitiateView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [PaymentInitiateThrottle]
 
     def post(self, request):
         serializer = PaymentInitiateSerializer(data=request.data)
@@ -28,9 +30,9 @@ class PaymentInitiateView(APIView):
             renter=request.user,
         )
 
-        if booking.status != 'approved':
+        if booking.status not in ('approved', 'payment_pending'):
             return Response(
-                {'error': 'Booking must be approved before payment.'},
+                {'error': 'Payment can only be initiated for approved bookings.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -47,7 +49,7 @@ class PaymentInitiateView(APIView):
                 status='pending',
             )
 
-        # Transition booking to payment_pending
+        # Transition booking to payment_pending (only if still in approved state)
         if booking.status == 'approved':
             from_status = booking.status
             booking.status = 'payment_pending'
@@ -136,6 +138,21 @@ class KhaltiCallbackView(APIView):
         txn_id = result.get('transaction_id', '')
 
         if khalti_status == 'Completed':
+            # Verify the amount returned by Khalti matches what we expect.
+            # Khalti returns amounts in paisa (1 NPR = 100 paisa).
+            expected_paisa = payment.amount * 100
+            actual_paisa = result.get('total_amount', 0)
+            if actual_paisa != expected_paisa:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    'Khalti amount mismatch: payment_id=%s expected=%d actual=%d',
+                    payment.id, expected_paisa, actual_paisa,
+                )
+                payment.status = 'failed'
+                payment.save(update_fields=['status'])
+                return _payment_html_page('failed')
+
             _complete_payment(payment, txn_id=txn_id, raw=result)
             return _payment_html_page('completed')
 
@@ -149,38 +166,59 @@ class KhaltiCallbackView(APIView):
 
 
 def _complete_payment(payment: Payment, txn_id: str, raw: dict) -> None:
-    """Mark payment completed and confirm the booking. Idempotent."""
-    if payment.status == 'completed':
-        return
+    """Mark payment completed and confirm the booking. Idempotent and atomic."""
+    from django.db import transaction as db_transaction
 
-    payment.gateway_txn_id = txn_id
-    payment.status = 'completed'
-    payment.completed_at = datetime.now(timezone.utc)
-    payment.raw_callback = raw
-    payment.save(update_fields=['gateway_txn_id', 'status', 'completed_at', 'raw_callback'])
+    with db_transaction.atomic():
+        # Re-fetch with lock inside the transaction to prevent race conditions
+        try:
+            payment = Payment.objects.select_for_update().get(pk=payment.pk)
+        except Payment.DoesNotExist:
+            return
 
-    booking = payment.booking
-    if booking.status == 'payment_pending':
-        booking.status = 'confirmed'
-        booking.save(update_fields=['status', 'updated_at'])
-        BookingStatusHistory.objects.create(
-            booking=booking,
-            from_status='payment_pending',
-            status='confirmed',
-            changed_by=None,
-            note='Payment confirmed via Khalti',
-        )
-        notify_payment_confirmed(booking)
+        if payment.status == 'completed':
+            return
+
+        payment.gateway_txn_id = txn_id
+        payment.status = 'completed'
+        payment.completed_at = datetime.now(timezone.utc)
+        payment.raw_callback = raw
+        payment.save(update_fields=['gateway_txn_id', 'status', 'completed_at', 'raw_callback'])
+
+        booking = payment.booking
+        if booking.status == 'payment_pending':
+            booking.status = 'confirmed'
+            booking.save(update_fields=['status', 'updated_at'])
+            BookingStatusHistory.objects.create(
+                booking=booking,
+                from_status='payment_pending',
+                status='confirmed',
+                changed_by=None,
+                note='Payment confirmed via Khalti',
+            )
+            notify_payment_confirmed(booking)
 
 
-def _payment_html_page(result: str) -> HttpResponse:
-    """Return a browser-friendly page after Khalti redirects back."""
+def _payment_html_page(result: str, deep_link_params: str = '') -> HttpResponse:
+    """
+    Return a browser-friendly page after Khalti redirects back.
+    Also attempts to redirect back into the DamiRent app via deep link.
+    """
     if result == 'completed':
-        icon, heading, msg, color = '✓', 'Payment Successful', 'Your booking is confirmed. You can close this tab and return to DamiRent.', '#16a34a'
+        icon, heading, msg, color = '✓', 'Payment Successful', 'Your booking is confirmed. Returning to DamiRent…', '#16a34a'
+        deep_link_status = 'Completed'
     elif result == 'pending':
-        icon, heading, msg, color = '⏳', 'Payment Pending', 'Your payment is being processed. Please return to the app to check status.', '#d97706'
+        icon, heading, msg, color = '⏳', 'Payment Pending', 'Your payment is being processed. Returning to DamiRent…', '#d97706'
+        deep_link_status = 'Pending'
     else:
-        icon, heading, msg, color = '✗', 'Payment Failed', 'Something went wrong. Please return to the app and try again.', '#dc2626'
+        icon, heading, msg, color = '✗', 'Payment Failed', 'Something went wrong. Returning to DamiRent…', '#dc2626'
+        deep_link_status = 'Failed'
+
+    # Build the deep link URL to reopen the app on the callback screen.
+    # The app's scheme is 'damirent' as configured in app.json.
+    deep_link = f'damirent://checkout/callback?status={deep_link_status}'
+    if deep_link_params:
+        deep_link += f'&{deep_link_params}'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -198,14 +236,27 @@ def _payment_html_page(result: str) -> HttpResponse:
     .icon {{ font-size: 56px; margin-bottom: 16px; color: {color}; }}
     h1 {{ font-size: 22px; font-weight: 700; color: #0f172a; margin-bottom: 12px; }}
     p {{ font-size: 15px; color: #64748b; line-height: 1.6; }}
-    .brand {{ margin-top: 32px; font-size: 13px; color: #94a3b8; }}
+    .btn {{ display: inline-block; margin-top: 24px; padding: 14px 28px;
+            background: #1d4ed8; color: white; text-decoration: none;
+            border-radius: 10px; font-size: 15px; font-weight: 600; }}
+    .brand {{ margin-top: 24px; font-size: 13px; color: #94a3b8; }}
   </style>
+  <script>
+    // Attempt to open the app immediately via deep link
+    window.location.href = '{deep_link}';
+    // Fallback: show the manual button after 1.5 s if the redirect didn't work
+    setTimeout(function() {{
+      var btn = document.getElementById('open-btn');
+      if (btn) btn.style.display = 'inline-block';
+    }}, 1500);
+  </script>
 </head>
 <body>
   <div class="card">
     <div class="icon">{icon}</div>
     <h1>{heading}</h1>
     <p>{msg}</p>
+    <a id="open-btn" href="{deep_link}" class="btn" style="display:none">Return to DamiRent</a>
     <p class="brand">DamiRent</p>
   </div>
 </body>

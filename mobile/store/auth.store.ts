@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { authService } from '@/services/auth.service';
 import { tokenStorage } from '@/services/api';
+import { queryClient } from '@/lib/queryClient';
 import type { User, LoginRequest, RegisterRequest } from '@/types';
 
 interface AuthState {
@@ -43,6 +44,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     }
     await tokenStorage.clear();
+    // Clear all cached query data so another user on the same device
+    // cannot see stale data from the previous session.
+    queryClient.clear();
     set({ user: null, isAuthenticated: false });
   },
 

@@ -115,6 +115,17 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'apps.accounts.exceptions.custom_exception_handler',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '120/hour',
+        'user': '600/hour',
+        'otp': '5/hour',
+        'login': '10/minute',
+        'payment_initiate': '10/hour',
+    },
 }
 
 SIMPLE_JWT = {
@@ -183,6 +194,33 @@ OTP_DEV_MODE = False               # Overridden to True in development.py
 # Only this account may approve or reject verification requests.
 # Override via env var VERIFICATION_ADMIN_EMAIL for non-default deployments.
 VERIFICATION_ADMIN_EMAIL = config('VERIFICATION_ADMIN_EMAIL', default='paudeldinesh961@gmail.com')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'apps.payments': {'level': 'INFO', 'propagate': True},
+        'apps.bookings': {'level': 'INFO', 'propagate': True},
+        'services': {'level': 'INFO', 'propagate': True},
+        'django.security': {'level': 'WARNING', 'propagate': True},
+    },
+}
 
 CHANNEL_LAYERS = {
     'default': {

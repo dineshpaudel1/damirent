@@ -133,56 +133,75 @@ class BookingListCreateView(APIView):
         if start_date < date.today():
             return Response({'error': 'Start date cannot be in the past.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check for overlapping availability blocks
-        overlap = AvailabilityBlock.objects.filter(
-            product=product,
-            start_date__lt=end_date,
-            end_date__gt=start_date,
-        ).exists()
-        if overlap:
+        # Calculate financials before entering the critical section
+        total_days = (end_date - start_date).days
+        if total_days < 1:
+            return Response({'error': 'End date must be after start date.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if product.min_rental_days and total_days < product.min_rental_days:
             return Response(
-                {'error': 'Product is not available for the selected dates.'},
+                {'error': f'Minimum rental duration for this item is {product.min_rental_days} day(s).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if product.max_rental_days and total_days > product.max_rental_days:
+            return Response(
+                {'error': f'Maximum rental duration for this item is {product.max_rental_days} day(s).'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Calculate financials
-        total_days = (end_date - start_date).days
         rental_total = total_days * product.price_per_day
         platform_fee = int(rental_total * settings.PLATFORM_FEE_PERCENT / 100)
         security_deposit = product.security_deposit
         total_charged = rental_total + platform_fee + security_deposit
 
-        booking = Booking.objects.create(
-            product=product,
-            renter=request.user,
-            owner=product.owner,
-            start_date=start_date,
-            end_date=end_date,
-            total_days=total_days,
-            rental_total=rental_total,
-            platform_fee=platform_fee,
-            security_deposit=security_deposit,
-            total_charged=total_charged,
-            renter_message=message,
-            status='pending_approval',
-        )
+        # Atomic section: re-check availability with a row lock to prevent double-booking
+        with transaction.atomic():
+            # Lock all existing blocks for this product so concurrent requests
+            # cannot both pass the overlap check simultaneously.
+            AvailabilityBlock.objects.select_for_update().filter(product=product)
 
-        # Hold the dates
-        AvailabilityBlock.objects.create(
-            product=product,
-            start_date=start_date,
-            end_date=end_date,
-            block_type='booking_hold',
-            booking=booking,
-        )
+            overlap = AvailabilityBlock.objects.filter(
+                product=product,
+                start_date__lt=end_date,
+                end_date__gt=start_date,
+            ).exists()
+            if overlap:
+                return Response(
+                    {'error': 'Product is not available for the selected dates.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        # Initial history
-        BookingStatusHistory.objects.create(
-            booking=booking,
-            from_status=None,
-            status='pending_approval',
-            changed_by=request.user,
-        )
+            booking = Booking.objects.create(
+                product=product,
+                renter=request.user,
+                owner=product.owner,
+                start_date=start_date,
+                end_date=end_date,
+                total_days=total_days,
+                rental_total=rental_total,
+                platform_fee=platform_fee,
+                security_deposit=security_deposit,
+                total_charged=total_charged,
+                renter_message=message,
+                status='pending_approval',
+            )
+
+            # Hold the dates immediately inside the same transaction
+            AvailabilityBlock.objects.create(
+                product=product,
+                start_date=start_date,
+                end_date=end_date,
+                block_type='booking_hold',
+                booking=booking,
+            )
+
+            # Initial history
+            BookingStatusHistory.objects.create(
+                booking=booking,
+                from_status=None,
+                status='pending_approval',
+                changed_by=request.user,
+            )
 
         booking.refresh_from_db()
         notify_booking_request(booking)

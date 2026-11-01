@@ -14,14 +14,29 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.damirent.app"
+      "bundleIdentifier": "com.damirent.app",
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": ["damirent"]
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#1E40AF",
         "foregroundImage": "./assets/android-icon-foreground.png"
       },
-      "package": "com.damirent.app"
+      "package": "com.damirent.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "damirent"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",

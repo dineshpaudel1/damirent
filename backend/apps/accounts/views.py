@@ -22,6 +22,7 @@ from .serializers import (
     IdentityVerificationStatusSerializer, VerificationAdminListSerializer,
     UserAdminSerializer,
 )
+from .throttles import OTPRateThrottle, LoginRateThrottle
 
 # ── File upload constraints ───────────────────────────────────────────────────
 
@@ -115,6 +116,7 @@ class RegisterView(APIView):
 
 class SendOTPView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         serializer = SendOTPSerializer(data=request.data)
@@ -137,6 +139,7 @@ class SendOTPView(APIView):
 
 class VerifyOTPView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
@@ -180,6 +183,7 @@ class VerifyOTPView(APIView):
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)

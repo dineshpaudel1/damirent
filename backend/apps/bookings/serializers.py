@@ -5,7 +5,7 @@ from .models import Booking, BookingStatusHistory, CancellationPenalty
 
 
 class CancellationPenaltySerializer(serializers.ModelSerializer):
-    booking_id = serializers.UUIDField(source='booking_id', read_only=True)
+    booking_id = serializers.UUIDField(read_only=True)
 
     class Meta:
         model = CancellationPenalty
