@@ -1,6 +1,10 @@
+import logging
+from django.conf import settings
 from django.utils import timezone
 from apps.payments.models import Payment, Refund
 from apps.bookings.models import Booking
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentError(Exception):
@@ -91,22 +95,93 @@ def handle_khalti_callback(payload: dict) -> Payment:
 
 def initiate_refund(payment: Payment, amount: int, reason: str, initiated_by=None) -> Refund:
     """
-    Create a refund record and initiate the refund via the gateway.
-    TODO: Call Khalti refund API.
+    Create a Refund record and call Khalti to process the refund.
+
+    Idempotent: if a completed refund already exists for the same payment
+    and reason, it returns the existing record without calling Khalti again.
+
+    In dev mode (no KHALTI_SECRET_KEY), marks the refund completed immediately
+    without hitting the API — useful for local testing.
+
+    Raises PaymentError if the amount exceeds the original payment or if
+    Khalti returns an error that is not retryable.
     """
+    if amount <= 0:
+        raise PaymentError('Refund amount must be greater than zero.')
     if amount > payment.amount:
         raise PaymentError('Refund amount cannot exceed original payment amount.')
+
+    # Idempotency: don't create a duplicate refund for the same payment + reason
+    existing = Refund.objects.filter(
+        payment=payment, reason=reason, status='completed'
+    ).first()
+    if existing:
+        logger.info('Refund already completed: refund_id=%s, skipping.', existing.id)
+        return existing
 
     refund = Refund.objects.create(
         payment=payment,
         amount=amount,
         reason=reason,
         initiated_by=initiated_by,
+        status='pending',
     )
 
-    # TODO: Call Khalti refund API
-    # PATCH https://a.khalti.com/api/v2/epayment/refund/
-    # On success: refund.status = 'completed', save
-    # On failure: schedule Celery retry
+    # Dev mode: no Khalti key configured — mark completed immediately
+    if not getattr(settings, 'KHALTI_SECRET_KEY', ''):
+        refund.status = 'completed'
+        refund.gateway_refund_id = f'DEV-REFUND-{refund.id.hex[:8].upper()}'
+        refund.completed_at = timezone.now()
+        refund.save(update_fields=['status', 'gateway_refund_id', 'completed_at'])
+        logger.info(
+            'DEV refund completed: refund_id=%s, payment_id=%s, amount=%d NPR, reason=%s',
+            refund.id, payment.id, amount, reason,
+        )
+        # Update original payment status to reflect refund
+        _update_payment_refund_status(payment, amount)
+        return refund
 
+    # Production: call Khalti refund API
+    if not payment.gateway_ref:
+        refund.status = 'failed'
+        refund.save(update_fields=['status'])
+        raise PaymentError(
+            f'Payment {payment.id} has no gateway_ref (pidx) — cannot issue refund.'
+        )
+
+    from apps.payments import khalti
+    try:
+        result = khalti.refund(pidx=payment.gateway_ref, amount_npr=amount)
+    except Exception as exc:
+        refund.status = 'failed'
+        refund.save(update_fields=['status'])
+        logger.error(
+            'Khalti refund API error: refund_id=%s, payment_id=%s, error=%s',
+            refund.id, payment.id, exc,
+        )
+        raise PaymentError(f'Khalti refund failed: {exc}') from exc
+
+    refund.gateway_refund_id = result.get('refund_id', '')
+    refund.status = 'completed'
+    refund.completed_at = timezone.now()
+    refund.save(update_fields=['gateway_refund_id', 'status', 'completed_at'])
+
+    logger.info(
+        'Khalti refund successful: refund_id=%s, khalti_refund_id=%s, amount=%d NPR',
+        refund.id, refund.gateway_refund_id, amount,
+    )
+
+    _update_payment_refund_status(payment, amount)
     return refund
+
+
+def _update_payment_refund_status(payment: Payment, refunded_amount: int) -> None:
+    """Update payment status to refunded or partially_refunded."""
+    total_refunded = sum(
+        r.amount for r in payment.refunds.filter(status='completed')
+    )
+    if total_refunded >= payment.amount:
+        payment.status = 'refunded'
+    else:
+        payment.status = 'partially_refunded'
+    payment.save(update_fields=['status'])

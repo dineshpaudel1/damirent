@@ -351,6 +351,9 @@ class BookingConfirmReturnView(APIView):
             return err
         booking.refresh_from_db()
         notify_booking_completed(booking)
+        # Kick off deposit refund asynchronously (retries on failure)
+        from tasks.payment_tasks import process_deposit_refunds
+        process_deposit_refunds.delay(str(booking.id))
         return Response(BookingSerializer(booking).data)
 
 

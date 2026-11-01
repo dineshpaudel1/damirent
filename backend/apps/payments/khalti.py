@@ -53,3 +53,21 @@ def lookup(pidx: str) -> dict:
     Returns full lookup response including 'status' and 'transaction_id'.
     """
     return _post(f'{KHALTI_BASE}/lookup/', {'pidx': pidx})
+
+
+def refund(pidx: str, amount_npr: int) -> dict:
+    """
+    Initiate a full or partial refund via Khalti.
+
+    Khalti refund endpoint: POST https://a.khalti.com/api/v2/epayment/refund/
+    Body: { "pidx": "<payment_pidx>", "amount": <paisa> }
+    amount is in paisa (1 NPR = 100 paisa).
+
+    On success Khalti returns:
+        { "pidx": "...", "refund_id": "...", "status": "Refunded" }
+    On failure raises urllib.error.HTTPError with error body.
+    """
+    return _post(f'{KHALTI_BASE}/refund/', {
+        'pidx': pidx,
+        'amount': amount_npr * 100,   # NPR → paisa
+    })

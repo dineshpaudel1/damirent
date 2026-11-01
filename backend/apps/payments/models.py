@@ -57,6 +57,10 @@ class Refund(models.Model):
     amount = models.PositiveIntegerField(help_text='NPR')
     reason = models.CharField(max_length=30, choices=REASON_CHOICES)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    gateway_refund_id = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Khalti refund_id returned on success — used for idempotency'
+    )
     initiated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
     )
