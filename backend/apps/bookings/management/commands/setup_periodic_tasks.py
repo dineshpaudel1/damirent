@@ -16,6 +16,11 @@ class Command(BaseCommand):
             every=60,
             period=IntervalSchedule.MINUTES,
         )
+        # Every 30 minutes — poll Khalti for stale pending/processing payments
+        every_30min, _ = IntervalSchedule.objects.get_or_create(
+            every=30,
+            period=IntervalSchedule.MINUTES,
+        )
 
         tasks = [
             {
@@ -32,6 +37,11 @@ class Command(BaseCommand):
                 'name': 'Auto-activate confirmed bookings on start date',
                 'task': 'tasks.activate_confirmed_bookings',
                 'interval': every_60min,
+            },
+            {
+                'name': 'Poll Khalti for stale pending/processing payments',
+                'task': 'tasks.poll_pending_payments',
+                'interval': every_30min,
             },
         ]
 
