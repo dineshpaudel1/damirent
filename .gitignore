@@ -1,2 +1,8 @@
 .DS_Store
 *.log
+
+# Production secrets — never commit
+backend/.env.production
+backend/.env
+.env.production
+certbot/
