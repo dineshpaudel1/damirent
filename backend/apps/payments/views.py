@@ -8,7 +8,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.bookings.models import Booking, BookingStatusHistory
+from apps.bookings.models import Booking, BookingStatusHistory, CancellationPenalty
+from services.notification_service import notify_payment_confirmed
 from .models import Payment
 from .serializers import PaymentSerializer, PaymentInitiateSerializer
 from . import khalti
@@ -169,6 +170,7 @@ def _complete_payment(payment: Payment, txn_id: str, raw: dict) -> None:
             changed_by=None,
             note='Payment confirmed via Khalti',
         )
+        notify_payment_confirmed(booking)
 
 
 def _payment_html_page(result: str) -> HttpResponse:
@@ -224,3 +226,105 @@ class PaymentStatusView(APIView):
             return Response({'error': 'No payment found for this booking.'}, status=status.HTTP_404_NOT_FOUND)
 
         return Response(PaymentSerializer(payment).data)
+
+
+class PenaltyPaymentInitiateView(APIView):
+    """Initiate a Khalti payment to clear an outstanding cancellation penalty."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, penalty_id):
+        penalty = get_object_or_404(
+            CancellationPenalty,
+            pk=penalty_id,
+            user=request.user,
+            status=CancellationPenalty.STATUS_PENDING,
+        )
+
+        # Dev mock — no Khalti keys configured
+        if not settings.KHALTI_SECRET_KEY:
+            callback_base = request.build_absolute_uri('/api/v1/payments/penalty-callback/')
+            return Response({
+                'payment_url': f'{callback_base}?pidx=DEVPENALTY-{penalty.id}&status=Completed',
+                'pidx': f'DEVPENALTY-{penalty.id}',
+            })
+
+        return_url = request.build_absolute_uri('/api/v1/payments/penalty-callback/')
+
+        try:
+            result = khalti.initiate(
+                payment_id=penalty.id,
+                amount_npr=penalty.amount,
+                order_name='DamiRent – Cancellation Penalty',
+                customer_name=request.user.full_name,
+                customer_email=request.user.email,
+                return_url=return_url,
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Payment gateway error: {str(e)}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        penalty.gateway_ref = result.get('pidx', '')
+        penalty.save(update_fields=['gateway_ref'])
+
+        return Response({
+            'payment_url': result['payment_url'],
+            'pidx': result['pidx'],
+        })
+
+
+class PenaltyKhaltiCallbackView(APIView):
+    """
+    Khalti redirects here after penalty payment.
+    Query params: pidx, status  (or pidx=DEVPENALTY-<uuid> in dev mode)
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        pidx = request.query_params.get('pidx', '')
+        callback_status = request.query_params.get('status', '')
+
+        if not pidx:
+            return Response({'error': 'Missing pidx.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Dev mock path
+        if pidx.startswith('DEVPENALTY-'):
+            penalty_id = pidx[len('DEVPENALTY-'):]
+            penalty = get_object_or_404(CancellationPenalty, pk=penalty_id)
+            if callback_status == 'Completed':
+                _complete_penalty_payment(penalty, txn_id=pidx, raw={})
+                return _payment_html_page('completed')
+            return _payment_html_page('failed')
+
+        # Real Khalti verification
+        penalty = CancellationPenalty.objects.filter(gateway_ref=pidx).first()
+        if not penalty:
+            return Response({'error': 'Penalty payment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            result = khalti.lookup(pidx)
+        except Exception as e:
+            return Response({'error': f'Verification failed: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        khalti_status = result.get('status', '')
+        txn_id = result.get('transaction_id', '')
+
+        if khalti_status == 'Completed':
+            _complete_penalty_payment(penalty, txn_id=txn_id, raw=result)
+            return _payment_html_page('completed')
+
+        if khalti_status in ('Pending', 'Initiated'):
+            return _payment_html_page('pending')
+
+        return _payment_html_page('failed')
+
+
+def _complete_penalty_payment(penalty, txn_id: str, raw: dict) -> None:
+    """Mark penalty as paid. Idempotent."""
+    if penalty.status == CancellationPenalty.STATUS_PAID:
+        return
+    penalty.gateway_txn_id = txn_id
+    penalty.status = CancellationPenalty.STATUS_PAID
+    penalty.paid_at = datetime.now(timezone.utc)
+    penalty.save(update_fields=['gateway_txn_id', 'status', 'paid_at'])

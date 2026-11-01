@@ -15,19 +15,34 @@ export interface User {
   phone: string | null;
   full_name: string;
   is_verified: boolean;
+  is_staff: boolean;
   date_joined: string;
   profile: UserProfile | null;
   identity_verification: IdentityVerification | null;
 }
 
 export interface UserProfile {
-  id: string;
   avatar: string | null;
   bio: string | null;
+  city: string | null;
   avg_owner_rating: string;
   avg_renter_rating: string;
   total_listings: number;
   total_rentals: number;
+  review_count: number;
+}
+
+// Admin user management
+export interface AdminUser {
+  id: string;
+  email: string;
+  full_name: string;
+  is_staff: boolean;
+  is_verified: boolean;
+  is_active: boolean;
+  date_joined: string;
+  avatar: string | null;
+  verification_status: VerificationStatus;
 }
 
 // Admin verification dashboard
@@ -85,10 +100,12 @@ export interface PasswordResetConfirmRequest {
 // ─── Category & Product ──────────────────────────────────────────────────────
 
 export interface Category {
-  id: number;
+  id: string;
   name: string;
   slug: string;
-  parent: number | null;
+  icon_name: string;
+  sort_order: number;
+  parent: string | null;
   children: Category[];
 }
 
@@ -123,11 +140,7 @@ export interface PublicUser {
   id: string;
   full_name: string;
   is_verified: boolean;
-  profile: {
-    avatar: string | null;
-    avg_owner_rating: string;
-    total_listings: number;
-  };
+  profile: Pick<UserProfile, 'avatar' | 'avg_owner_rating' | 'total_listings'>;
 }
 
 export interface CreateProductRequest {
@@ -177,6 +190,7 @@ export interface Booking {
   owner_note: string;
   created_at: string;
   updated_at: string;
+  cancellation_penalty: CancellationPenalty | null;
 }
 
 export interface BookingStatusHistory {
@@ -193,6 +207,19 @@ export interface CreateBookingRequest {
   start_date: string;
   end_date: string;
   message?: string;
+}
+
+// ─── Cancellation Penalty ────────────────────────────────────────────────────
+
+export type CancellationPenaltyStatus = 'pending' | 'paid' | 'waived';
+
+export interface CancellationPenalty {
+  id: string;
+  booking_id: string;
+  amount: number;
+  status: CancellationPenaltyStatus;
+  created_at: string;
+  paid_at: string | null;
 }
 
 // ─── Payment ─────────────────────────────────────────────────────────────────

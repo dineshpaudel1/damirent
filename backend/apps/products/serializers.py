@@ -1,3 +1,4 @@
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from apps.accounts.models import UserProfile
@@ -9,10 +10,31 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ['id', 'name', 'slug', 'icon_name', 'parent', 'children']
+        fields = ['id', 'name', 'slug', 'icon_name', 'sort_order', 'parent', 'children']
 
     def get_children(self, obj):
         return CategorySerializer(obj.children.all(), many=True).data
+
+
+class CategoryWriteSerializer(serializers.ModelSerializer):
+    slug = serializers.SlugField(required=False, allow_blank=True)
+
+    class Meta:
+        model = Category
+        fields = ['name', 'slug', 'icon_name', 'sort_order', 'parent']
+
+    def validate(self, data):
+        name = data.get('name') or (self.instance.name if self.instance else '')
+        slug = data.get('slug') or slugify(name)
+
+        qs = Category.objects.filter(slug=slug)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError({'slug': f'A category with slug "{slug}" already exists.'})
+
+        data['slug'] = slug
+        return data
 
 
 class PublicUserProfileSerializer(serializers.ModelSerializer):
@@ -72,10 +94,14 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
     def get_avg_rating(self, obj):
-        return '0.00'
+        from django.db.models import Avg
+        from apps.reviews.models import Review
+        avg = Review.objects.filter(product=obj).aggregate(avg=Avg('rating'))['avg']
+        return f'{avg:.2f}' if avg else '0.00'
 
     def get_review_count(self, obj):
-        return 0
+        from apps.reviews.models import Review
+        return Review.objects.filter(product=obj).count()
 
 
 class ProductWriteSerializer(serializers.ModelSerializer):
@@ -89,7 +115,7 @@ class ProductWriteSerializer(serializers.ModelSerializer):
 
 
 class ProductImageUploadSerializer(serializers.Serializer):
-    image = serializers.ImageField()
+    image = serializers.FileField()
     is_primary = serializers.BooleanField(default=False)
 
 

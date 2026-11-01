@@ -16,6 +16,7 @@ export interface ProductFilters {
   page?: number;
   page_size?: number;
   ordering?: string;
+  owner?: string;
 }
 
 export const productService = {
@@ -47,15 +48,14 @@ export const productService = {
     productId: string,
     uri: string,
     isPrimary = false,
+    mimeType = 'image/jpeg',
   ): Promise<{ id: string; image: string }> {
     const formData = new FormData();
     const filename = uri.split('/').pop() ?? 'image.jpg';
-    formData.append('image', { uri, name: filename, type: 'image/jpeg' } as unknown as Blob);
+    formData.append('image', { uri, name: filename, type: mimeType } as unknown as Blob);
     formData.append('is_primary', String(isPrimary));
 
-    const res = await api.post(`/products/${productId}/images/`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const res = await api.post(`/products/${productId}/images/`, formData);
     return res.data;
   },
 
@@ -93,5 +93,27 @@ export const productService = {
   async listCategories(): Promise<Category[]> {
     const res = await api.get('/categories/');
     return res.data;
+  },
+
+  async createCategory(data: {
+    name: string;
+    icon_name?: string;
+    sort_order?: number;
+    parent?: string | null;
+  }): Promise<Category> {
+    const res = await api.post('/categories/', data);
+    return res.data;
+  },
+
+  async updateCategory(
+    id: string,
+    data: { name?: string; icon_name?: string; sort_order?: number },
+  ): Promise<Category> {
+    const res = await api.patch(`/categories/${id}/`, data);
+    return res.data;
+  },
+
+  async deleteCategory(id: string): Promise<void> {
+    await api.delete(`/categories/${id}/`);
   },
 };

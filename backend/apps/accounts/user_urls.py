@@ -17,10 +17,14 @@ urlpatterns = [
     # Public profile
     path('<uuid:id>/', views.PublicProfileView.as_view(), name='public-profile'),
 
-    # ── Verification admin (paudeldinesh961@gmail.com only) ────────────────────
+    # ── Verification admin (staff users only) ──────────────────────────────────
     # NOTE: In production, configure nginx to deny direct access to /media/identities/
     # so that identity documents are only served through these authenticated endpoints.
     path('verification/pending/', views.VerificationDashboardView.as_view(), name='verification-pending'),
     path('verification/<uuid:user_id>/<str:action>/', views.VerificationActionView.as_view(), name='verification-action'),
     path('verification/<uuid:user_id>/document/<str:side>/', views.AdminDocumentView.as_view(), name='admin-identity-document'),
+
+    # ── Admin: user management ─────────────────────────────────────────────────
+    path('admin/list/', views.UserAdminListView.as_view(), name='admin-user-list'),
+    path('admin/<uuid:user_id>/staff/', views.StaffToggleView.as_view(), name='admin-staff-toggle'),
 ]

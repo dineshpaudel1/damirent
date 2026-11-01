@@ -44,6 +44,12 @@ api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // FormData uploads: remove Content-Type so React Native sets it automatically
+  // with the correct multipart/form-data boundary. Axios instance defaults
+  // (Content-Type: application/json) would otherwise override what RN sets.
+  if (config.data instanceof FormData) {
+    config.headers.delete('Content-Type');
+  }
   return config;
 });
 

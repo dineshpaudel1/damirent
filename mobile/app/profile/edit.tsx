@@ -82,11 +82,14 @@ export default function EditProfileScreen() {
     setPhotoLoading(true);
 
     try {
-      await authService.uploadProfilePhoto(asset.uri);
+      await authService.uploadProfilePhoto(asset.uri, asset.mimeType ?? 'image/jpeg');
+      // Sync full user so profile.avatar reflects the server URL
       await refreshUser();
-    } catch {
+    } catch (err) {
       setLocalPhotoUri(null);
-      Alert.alert('Upload failed', 'Could not upload your photo. Please try again.');
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      const msg = axiosErr.response?.data?.error ?? 'Could not upload your photo. Please try again.';
+      Alert.alert('Upload failed', msg);
     } finally {
       setPhotoLoading(false);
     }

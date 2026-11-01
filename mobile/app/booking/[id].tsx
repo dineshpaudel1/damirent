@@ -1,13 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { AxiosError } from 'axios';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,7 +22,7 @@ import BookingStatusBadge from '@/components/ui/BookingStatusBadge';
 import Button from '@/components/ui/Button';
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { formatDate, formatPrice } from '@/utils/formatters';
-import type { BookingStatus } from '@/types';
+import type { BookingStatus, CancellationPenalty } from '@/types';
 
 // ── Status timeline ───────────────────────────────────────────────────────────
 
@@ -187,6 +191,183 @@ function PriceRow({ label, value, bold }: { label: string; value: string; bold?:
   );
 }
 
+// ── Cancel Confirm Modal ──────────────────────────────────────────────────────
+
+function CancelConfirmModal({
+  visible,
+  booking,
+  onClose,
+  onConfirm,
+  loading,
+}: {
+  visible: boolean;
+  booking: import('@/types').Booking;
+  onClose: () => void;
+  onConfirm: () => void;
+  loading: boolean;
+}) {
+  const elapsedMinutes =
+    (Date.now() - new Date(booking.created_at).getTime()) / 60000;
+  const hasPenalty = elapsedMinutes > 60;
+  const penaltyAmount = hasPenalty
+    ? Math.floor((booking.rental_total * 5) / 100)
+    : 0;
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <Pressable style={cm.overlay} onPress={onClose} />
+      <View style={cm.centeredWrap}>
+        <View style={cm.sheet}>
+          <View style={cm.iconWrap}>
+            <Ionicons name="alert-circle-outline" size={32} color={Colors.error} />
+          </View>
+
+          <Text style={cm.title}>Cancel booking?</Text>
+
+          {hasPenalty ? (
+            <>
+              <Text style={cm.message}>
+                You are cancelling this booking after the free cancellation period. A cancellation
+                penalty of{' '}
+                <Text style={cm.highlight}>{formatPrice(penaltyAmount)}</Text> (5% of rental
+                amount) will apply. You must clear this outstanding amount before making another
+                booking.
+              </Text>
+              <View style={cm.penaltyBox}>
+                <Ionicons name="warning-outline" size={15} color={Colors.warning} />
+                <Text style={cm.penaltyText}>
+                  Penalty: {formatPrice(penaltyAmount)}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <Text style={cm.message}>
+              You can cancel within one hour of booking without any penalty. No penalty will be
+              charged.
+            </Text>
+          )}
+
+          <View style={cm.actions}>
+            <Pressable style={cm.cancelBtn} onPress={onClose} disabled={loading}>
+              <Text style={cm.cancelBtnText}>Keep booking</Text>
+            </Pressable>
+            <Pressable
+              style={[cm.confirmBtn, loading && cm.confirmBtnDisabled]}
+              onPress={onConfirm}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color={Colors.textInverse} />
+              ) : (
+                <Text style={cm.confirmBtnText}>
+                  {hasPenalty ? 'Cancel (penalty applies)' : 'Yes, cancel'}
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const cm = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+  },
+  centeredWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing['2xl'],
+  },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius['2xl'],
+    padding: Spacing['2xl'],
+    alignItems: 'center',
+    gap: Spacing.md,
+    width: '100%',
+  },
+  iconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.errorSurface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.xl,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  message: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: Typography.fontSize.sm * 1.65,
+  },
+  highlight: {
+    fontFamily: Typography.fontFamily.bold,
+    color: Colors.error,
+  },
+  penaltyBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.warningSurface,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    alignSelf: 'stretch',
+    borderWidth: 1,
+    borderColor: Colors.warning + '44',
+  },
+  penaltyText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textPrimary,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignSelf: 'stretch',
+    marginTop: Spacing.xs,
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  cancelBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+  },
+  confirmBtn: {
+    flex: 1,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    backgroundColor: Colors.error,
+  },
+  confirmBtnDisabled: {
+    opacity: 0.6,
+  },
+  confirmBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textInverse,
+  },
+});
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function BookingDetailScreen() {
@@ -194,6 +375,7 @@ export default function BookingDetailScreen() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
 
   const { data: booking, isLoading } = useQuery({
     queryKey: ['booking', id],
@@ -232,11 +414,18 @@ export default function BookingDetailScreen() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['booking', id] }),
   });
 
+  const initiatePenaltyPayment = useMutation({
+    mutationFn: (penaltyId: string) => bookingService.initiatePenaltyPayment(penaltyId),
+    onSuccess: async (data) => {
+      await Linking.openURL(data.payment_url);
+    },
+    onError: () => {
+      Alert.alert('Error', 'Could not initiate payment. Please try again.');
+    },
+  });
+
   function handleCancel() {
-    Alert.alert('Cancel booking', 'Are you sure you want to cancel?', [
-      { text: 'No', style: 'cancel' },
-      { text: 'Yes, cancel', style: 'destructive', onPress: () => cancel.mutate() },
-    ]);
+    setCancelModalOpen(true);
   }
 
   // ── Loading ──────────────────────────────────────────────
@@ -365,6 +554,46 @@ export default function BookingDetailScreen() {
           <View style={styles.priceDivider} />
           <PriceRow label="Total charged" value={formatPrice(booking.total_charged)} bold />
         </View>
+
+        {/* ── Cancellation penalty ──────────────────────── */}
+        {booking.cancellation_penalty && (
+          <View style={[styles.card, Shadow.sm, styles.penaltyCard]}>
+            <View style={styles.cardHeader}>
+              <Ionicons name="warning-outline" size={16} color={Colors.error} />
+              <Text style={[styles.cardTitle, { color: Colors.error }]}>Cancellation penalty</Text>
+              {booking.cancellation_penalty.status === 'paid' && (
+                <View style={styles.paidBadge}>
+                  <Ionicons name="checkmark-circle" size={12} color={Colors.success} />
+                  <Text style={styles.paidBadgeText}>Paid</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.priceRow}>
+              <Text style={styles.priceLabel}>Penalty amount (5%)</Text>
+              <Text style={[styles.priceValue, { color: Colors.error }]}>
+                {formatPrice(booking.cancellation_penalty.amount)}
+              </Text>
+            </View>
+            <View style={styles.priceRow}>
+              <Text style={styles.priceLabel}>Status</Text>
+              <Text style={[styles.priceValue, {
+                color: booking.cancellation_penalty.status === 'paid' ? Colors.success : Colors.warning,
+              }]}>
+                {booking.cancellation_penalty.status === 'paid' ? 'Paid' : 'Outstanding'}
+              </Text>
+            </View>
+
+            {booking.cancellation_penalty.status === 'pending' && isRenter && (
+              <Button
+                label={initiatePenaltyPayment.isPending ? 'Opening payment…' : 'Pay outstanding amount'}
+                onPress={() => initiatePenaltyPayment.mutate(booking.cancellation_penalty!.id)}
+                loading={initiatePenaltyPayment.isPending}
+                size="lg"
+              />
+            )}
+          </View>
+        )}
 
         {/* ── Pickup location ───────────────────────────── */}
         <View style={[styles.card, Shadow.sm]}>
@@ -509,6 +738,19 @@ export default function BookingDetailScreen() {
         )}
 
       </ScrollView>
+
+      {booking && (
+        <CancelConfirmModal
+          visible={cancelModalOpen}
+          booking={booking}
+          onClose={() => setCancelModalOpen(false)}
+          onConfirm={() => {
+            setCancelModalOpen(false);
+            cancel.mutate();
+          }}
+          loading={cancel.isPending}
+        />
+      )}
     </View>
   );
 }
@@ -784,6 +1026,27 @@ const styles = StyleSheet.create({
   actions: {
     gap: Spacing.sm,
     marginTop: Spacing.sm,
+  },
+
+  // ── Penalty card ────────────────────────────────────────
+  penaltyCard: {
+    borderWidth: 1,
+    borderColor: Colors.error + '33',
+  },
+  paidBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginLeft: 'auto',
+    backgroundColor: Colors.successSurface,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+  },
+  paidBadgeText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.success,
   },
 
   // ── Review card ─────────────────────────────────────────

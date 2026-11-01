@@ -57,6 +57,11 @@ export const authService = {
     return res.data;
   },
 
+  async getPublicProfile(userId: string): Promise<any> {
+    const res = await api.get(`/users/${userId}/`);
+    return res.data;
+  },
+
   async updateMe(data: Partial<Pick<User, 'full_name' | 'email'>>): Promise<User> {
     const res = await api.patch('/users/me/', data);
     return res.data;
@@ -68,16 +73,11 @@ export const authService = {
 
   // ── Profile photo ──────────────────────────────────────────────────────────
 
-  async uploadProfilePhoto(uri: string): Promise<{ avatar: string }> {
+  async uploadProfilePhoto(uri: string, mimeType = 'image/jpeg'): Promise<{ avatar: string }> {
     const formData = new FormData();
     const filename = uri.split('/').pop() ?? 'photo.jpg';
-    const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpg';
-    const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
     formData.append('photo', { uri, name: filename, type: mimeType } as unknown as Blob);
-
-    const res = await api.post('/users/me/photo/', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const res = await api.post('/users/me/photo/', formData);
     return res.data;
   },
 
@@ -116,9 +116,7 @@ export const authService = {
       type: mimeOf(extOf(backName)),
     } as unknown as Blob);
 
-    const res = await api.post('/users/me/identity/', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const res = await api.post('/users/me/identity/', formData);
     return res.data;
   },
 
@@ -155,5 +153,19 @@ export const authService = {
       uri: `${API_BASE_URL}/users/verification/${userId}/document/${side}/`,
       headers: { Authorization: `Bearer ${token}` },
     };
+  },
+
+  // ── Admin: user management ─────────────────────────────────────────────────
+
+  async getAdminUsers(search?: string): Promise<{ count: number; results: import('@/types').AdminUser[] }> {
+    const params: Record<string, string> = {};
+    if (search) params.search = search;
+    const res = await api.get('/users/admin/list/', { params });
+    return res.data;
+  },
+
+  async toggleStaff(userId: string): Promise<{ is_staff: boolean; message: string }> {
+    const res = await api.post(`/users/admin/${userId}/staff/`);
+    return res.data;
   },
 };

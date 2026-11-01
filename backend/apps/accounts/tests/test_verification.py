@@ -76,7 +76,7 @@ def other_user(db):
 
 @pytest.fixture
 def admin_user(db):
-    return make_user(ADMIN_EMAIL, full_name='Admin User')
+    return make_user(ADMIN_EMAIL, full_name='Admin User', is_staff=True)
 
 
 @pytest.fixture
@@ -383,12 +383,12 @@ class TestVerificationDashboard:
         res = client.get(self.URL)
         assert res.status_code == 401
 
-    def test_other_superuser_forbidden(self, db):
-        """A staff/superuser without the exact admin email is still denied."""
-        staff = make_user('staff@example.com', full_name='Staff', is_staff=True, is_superuser=True)
+    def test_any_staff_user_allowed(self, db):
+        """Any user with is_staff=True can access the dashboard (not email-gated)."""
+        staff = make_user('staff@example.com', full_name='Staff', is_staff=True)
         client = auth_client_for(staff)
         res = client.get(self.URL)
-        assert res.status_code == 403
+        assert res.status_code == 200
 
 
 # ── Admin approve / reject ────────────────────────────────────────────────────

@@ -176,17 +176,44 @@ export default function HomeScreen() {
           <Text style={styles.searchPlaceholder}>Cameras, bikes, tools…</Text>
         </Pressable>
 
-        {/* ── Earn banner ────────────────────────────────── */}
+        {/* ── Earn card ────────────────────────────────── */}
         <Pressable
-          style={styles.earnBanner}
+          style={[styles.earnCard, Shadow.md]}
           onPress={() => router.push('/listing/create')}
         >
-          <View style={styles.earnText}>
-            <Text style={styles.earnTitle}>Earn from your things</Text>
-            <Text style={styles.earnSub}>List any item and start earning today</Text>
+          {/* Decorative circles */}
+          <View style={styles.earnCircle1} />
+          <View style={styles.earnCircle2} />
+
+          {/* Top row: badge + CTA */}
+          <View style={styles.earnRow}>
+            <View style={styles.earnBadge}>
+              <Ionicons name="trending-up-outline" size={11} color={Colors.secondary} />
+              <Text style={styles.earnBadgeText}>Passive income</Text>
+            </View>
+            <View style={styles.earnCta}>
+              <Text style={styles.earnCtaText}>List an item</Text>
+              <Ionicons name="arrow-forward" size={13} color={Colors.textInverse} />
+            </View>
           </View>
-          <View style={styles.earnIconWrap}>
-            <Ionicons name="arrow-forward" size={18} color={Colors.primary} />
+
+          {/* Title */}
+          <Text style={styles.earnTitle}>Earn from your things</Text>
+
+          {/* Feature pills */}
+          <View style={styles.earnFeatures}>
+            <View style={styles.earnFeatureItem}>
+              <Ionicons name="checkmark-circle-outline" size={12} color={Colors.secondaryLight} />
+              <Text style={styles.earnFeatureText}>Free to list</Text>
+            </View>
+            <View style={styles.earnFeatureItem}>
+              <Ionicons name="checkmark-circle-outline" size={12} color={Colors.secondaryLight} />
+              <Text style={styles.earnFeatureText}>Quick setup</Text>
+            </View>
+            <View style={styles.earnFeatureItem}>
+              <Ionicons name="checkmark-circle-outline" size={12} color={Colors.secondaryLight} />
+              <Text style={styles.earnFeatureText}>You set the price</Text>
+            </View>
           </View>
         </Pressable>
 
@@ -433,39 +460,90 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
   },
 
-  // ── Earn banner ───────────────────────────────────────────
-  earnBanner: {
+  // ── Earn card ─────────────────────────────────────────────
+  earnCard: {
     marginHorizontal: Spacing.base,
-    backgroundColor: Colors.primarySurface,
+    backgroundColor: Colors.primary,
     borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.primary + '33',
-    paddingHorizontal: Spacing.base,
+    overflow: 'hidden',
+    padding: Spacing.base,
     paddingVertical: Spacing.md,
+    gap: Spacing.sm,
+  },
+  earnCircle1: {
+    position: 'absolute',
+    top: -28,
+    right: -28,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  earnCircle2: {
+    position: 'absolute',
+    bottom: -18,
+    right: 28,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.secondary + '28',
+  },
+  earnRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    justifyContent: 'space-between',
   },
-  earnText: { flex: 1, gap: 2 },
-  earnTitle: {
-    fontFamily: Typography.fontFamily.semiBold,
-    fontSize: Typography.fontSize.base,
-    color: Colors.primary,
-  },
-  earnSub: {
-    fontFamily: Typography.fontFamily.regular,
-    fontSize: Typography.fontSize.sm,
-    color: Colors.textSecondary,
-  },
-  earnIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.surface,
+  earnBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: Colors.secondary + '25',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: Colors.primary + '33',
+    borderColor: Colors.secondary + '55',
+  },
+  earnBadgeText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.secondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  earnTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.lg,
+    color: Colors.textInverse,
+  },
+  earnFeatures: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  earnFeatureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  earnFeatureText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.xs,
+    color: 'rgba(255,255,255,0.70)',
+  },
+  earnCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Colors.secondary,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+  },
+  earnCtaText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textInverse,
   },
 
   // ── Section ───────────────────────────────────────────────

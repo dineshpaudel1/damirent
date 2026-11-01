@@ -16,11 +16,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { productService } from '@/services/product.service';
 import { bookingService } from '@/services/booking.service';
+import { authService } from '@/services/auth.service';
 import { useAuthStore } from '@/store/auth.store';
 import Button from '@/components/ui/Button';
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 import { formatPricePerDay, formatPrice, formatDate, formatRelativeTime } from '@/utils/formatters';
-import type { AvailabilityBlock, Review } from '@/types';
+import type { AvailabilityBlock, Review, VerificationStatus } from '@/types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const IMAGE_HEIGHT = 300;
@@ -377,6 +378,153 @@ function DateRangePicker({
   );
 }
 
+// ── Verification Gate Modal ───────────────────────────────────────────────────
+
+function VerificationGateModal({
+  visible,
+  status,
+  onClose,
+}: {
+  visible: boolean;
+  status: VerificationStatus | 'not_submitted';
+  onClose: () => void;
+}) {
+  const isNotSubmitted = status === 'not_submitted';
+  const isPending = status === 'pending';
+  const isRejected = status === 'rejected';
+
+  const config = isNotSubmitted
+    ? {
+        icon: 'document-text-outline' as const,
+        iconColor: Colors.primary,
+        iconBg: Colors.primarySurface,
+        title: 'Verification required',
+        message:
+          'You are not eligible to book this product. Please upload your verification documents and complete verification first.',
+        actionLabel: 'Verify Now',
+        actionColor: Colors.primary,
+      }
+    : isPending
+    ? {
+        icon: 'hourglass-outline' as const,
+        iconColor: Colors.warning,
+        iconBg: Colors.warningSurface,
+        title: 'Verification pending',
+        message:
+          'Your verification is pending admin approval. You can book products once your account has been verified.',
+        actionLabel: 'View status',
+        actionColor: Colors.warning,
+      }
+    : {
+        icon: 'close-circle-outline' as const,
+        iconColor: Colors.error,
+        iconBg: Colors.errorSurface,
+        title: 'Verification rejected',
+        message:
+          'Your verification was rejected. Please review the feedback, update your documents, and submit them again.',
+        actionLabel: 'Resubmit documents',
+        actionColor: Colors.error,
+      };
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <Pressable style={vg.overlay} onPress={onClose} />
+      <View style={vg.centeredWrap}>
+        <View style={vg.sheet}>
+          {/* Icon */}
+          <View style={[vg.iconCircle, { backgroundColor: config.iconBg }]}>
+            <Ionicons name={config.icon} size={32} color={config.iconColor} />
+          </View>
+
+          {/* Title */}
+          <Text style={vg.title}>{config.title}</Text>
+
+          {/* Message */}
+          <Text style={vg.message}>{config.message}</Text>
+
+          {/* Action button */}
+          <Pressable
+            style={[vg.actionBtn, { backgroundColor: config.actionColor }]}
+            onPress={() => {
+              onClose();
+              router.push('/profile/verification');
+            }}
+          >
+            <Text style={vg.actionBtnText}>{config.actionLabel}</Text>
+          </Pressable>
+
+          {/* Dismiss */}
+          <Pressable style={vg.dismissBtn} onPress={onClose}>
+            <Text style={vg.dismissText}>Not now</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const vg = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+  },
+  centeredWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing['2xl'],
+  },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius['2xl'],
+    padding: Spacing['2xl'],
+    alignItems: 'center',
+    gap: Spacing.md,
+    width: '100%',
+  },
+  iconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.xs,
+  },
+  title: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize.xl,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  message: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: Typography.fontSize.sm * 1.65,
+  },
+  actionBtn: {
+    width: '100%',
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    marginTop: Spacing.xs,
+  },
+  actionBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.base,
+    color: Colors.textInverse,
+  },
+  dismissBtn: {
+    paddingVertical: Spacing.sm,
+  },
+  dismissText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textTertiary,
+  },
+});
+
 // ── Product Detail Screen ──────────────────────────────────────────────────────
 
 export default function ProductDetailScreen() {
@@ -386,6 +534,7 @@ export default function ProductDetailScreen() {
 
   const [imageIndex, setImageIndex] = useState(0);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [verificationModalOpen, setVerificationModalOpen] = useState(false);
   const sliderRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
   const { data: product, isLoading } = useQuery({
@@ -405,6 +554,21 @@ export default function ProductDetailScreen() {
     queryFn: () => bookingService.getReviewsForProduct(id),
     enabled: !!id,
   });
+
+  const { data: verification } = useQuery({
+    queryKey: ['verification-status'],
+    queryFn: () => authService.getVerificationStatus(),
+    enabled: !!product && product.owner.id !== user?.id,
+  });
+
+  function handleBookNow() {
+    const vstatus = verification?.verification_status ?? 'not_submitted';
+    if (vstatus === 'verified') {
+      setCalendarOpen(true);
+    } else {
+      setVerificationModalOpen(true);
+    }
+  }
 
   function goToImage(index: number) {
     const clamped = Math.max(0, Math.min(index, images.length - 1));
@@ -627,7 +791,7 @@ export default function ProductDetailScreen() {
 
           {/* Book trigger (renters only) */}
           {!isOwner && product.is_available && (
-            <Pressable style={styles.bookTrigger} onPress={() => setCalendarOpen(true)}>
+            <Pressable style={styles.bookTrigger} onPress={handleBookNow}>
               <View style={styles.bookTriggerLeft}>
                 <View style={styles.bookTriggerIconWrap}>
                   <Ionicons name="calendar-outline" size={18} color={Colors.primary} />
@@ -652,7 +816,7 @@ export default function ProductDetailScreen() {
           </View>
           <Button
             label="Book now"
-            onPress={() => setCalendarOpen(true)}
+            onPress={handleBookNow}
             fullWidth={false}
             size="md"
           />
@@ -671,6 +835,13 @@ export default function ProductDetailScreen() {
           />
         </View>
       )}
+
+      {/* ── Verification gate modal ───────────────────── */}
+      <VerificationGateModal
+        visible={verificationModalOpen}
+        status={verification?.verification_status ?? 'not_submitted'}
+        onClose={() => setVerificationModalOpen(false)}
+      />
 
       {/* ── Calendar modal ────────────────────────────── */}
       <DateRangePicker

@@ -1,8 +1,12 @@
 import { Redirect, Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/store/auth.store';
+import { bookingService } from '@/services/booking.service';
 import { Colors, Typography } from '@/constants/theme';
+import { useNotificationSocket } from '@/hooks/useNotificationSocket';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 
@@ -29,6 +33,16 @@ function TabIcon({
 
 export default function TabLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  const { data: notifData } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => bookingService.listNotifications(),
+    refetchInterval: 60_000,
+    enabled: isAuthenticated,
+  });
+  const unreadCount = notifData?.results?.filter((n) => !n.is_read).length ?? 0;
+  useNotificationSocket(isAuthenticated);
+  usePushNotifications(isAuthenticated);
 
   if (!isAuthenticated) {
     return <Redirect href="/(auth)/login" />;
@@ -75,6 +89,8 @@ export default function TabLayout() {
         name="inbox"
         options={{
           title: 'Inbox',
+          tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? '99+' : unreadCount) : undefined,
+          tabBarBadgeStyle: styles.badge,
           tabBarIcon: ({ focused }) => (
             <TabIcon focused={focused} icon="notifications-outline" iconFocused="notifications" />
           ),
@@ -116,5 +132,13 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: Colors.tabBarActive,
+  },
+  badge: {
+    fontSize: 10,
+    fontFamily: Typography.fontFamily.bold,
+    minWidth: 16,
+    height: 16,
+    lineHeight: 16,
+    paddingHorizontal: 3,
   },
 });

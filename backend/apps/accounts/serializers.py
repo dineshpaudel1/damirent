@@ -36,6 +36,7 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {'non_field_errors': ['Invalid email or password.']}
             )
+        
         if not user.is_active:
             raise serializers.ValidationError(
                 {'non_field_errors': ['This account has been disabled.']}
@@ -45,19 +46,25 @@ class LoginSerializer(serializers.Serializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    # Computed live from DB — always accurate, never stale
     avatar = serializers.SerializerMethodField()
+    avg_owner_rating = serializers.SerializerMethodField()
+    avg_renter_rating = serializers.SerializerMethodField()
+    total_listings = serializers.SerializerMethodField()
+    total_rentals = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
         fields = (
-            'avatar', 'profile_photo_url', 'bio', 'city',
-            'avg_rating_as_owner', 'avg_rating_as_renter',
-            'total_rentals_as_owner', 'total_rentals_as_renter',
+            'avatar', 'bio', 'city',
+            'avg_owner_rating', 'avg_renter_rating',
+            'total_listings', 'total_rentals', 'review_count',
         )
         read_only_fields = (
             'avatar',
-            'avg_rating_as_owner', 'avg_rating_as_renter',
-            'total_rentals_as_owner', 'total_rentals_as_renter',
+            'avg_owner_rating', 'avg_renter_rating',
+            'total_listings', 'total_rentals', 'review_count',
         )
 
     def get_avatar(self, obj):
@@ -68,6 +75,34 @@ class UserProfileSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(url)
             return url
         return obj.profile_photo_url
+
+    def get_avg_owner_rating(self, obj):
+        from django.db.models import Avg
+        from apps.reviews.models import Review
+        avg = Review.objects.filter(
+            reviewee=obj.user, review_type='renter_reviewing_owner'
+        ).aggregate(avg=Avg('rating'))['avg']
+        return f'{avg:.2f}' if avg else '0.00'
+
+    def get_avg_renter_rating(self, obj):
+        from django.db.models import Avg
+        from apps.reviews.models import Review
+        avg = Review.objects.filter(
+            reviewee=obj.user, review_type='owner_reviewing_renter'
+        ).aggregate(avg=Avg('rating'))['avg']
+        return f'{avg:.2f}' if avg else '0.00'
+
+    def get_total_listings(self, obj):
+        from apps.products.models import Product
+        return Product.objects.filter(owner=obj.user, is_active=True).count()
+
+    def get_total_rentals(self, obj):
+        from apps.bookings.models import Booking
+        return Booking.objects.filter(renter=obj.user, status='completed').count()
+
+    def get_review_count(self, obj):
+        from apps.reviews.models import Review
+        return Review.objects.filter(reviewee=obj.user).count()
 
 
 class IdentityVerificationStatusSerializer(serializers.ModelSerializer):
@@ -84,10 +119,10 @@ class MeSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'phone', 'full_name', 'is_verified',
+            'id', 'email', 'phone', 'full_name', 'is_verified', 'is_staff',
             'date_joined', 'profile', 'identity_verification',
         )
-        read_only_fields = ('id', 'email', 'is_verified', 'date_joined')
+        read_only_fields = ('id', 'email', 'is_verified', 'is_staff', 'date_joined')
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -187,3 +222,36 @@ class VerificationAdminListSerializer(serializers.ModelSerializer):
         model = IdentityVerification
         fields = ('id', 'user', 'verification_status', 'rejection_reason', 'submitted_at', 'verified_at')
         read_only_fields = fields
+
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    """Serializer for superuser's user-management dashboard."""
+    avatar = serializers.SerializerMethodField()
+    verification_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            'id', 'email', 'full_name', 'is_staff', 'is_verified', 'is_active',
+            'date_joined', 'avatar', 'verification_status',
+        )
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        request = self.context.get('request')
+        try:
+            profile = obj.profile
+            if profile.profile_photo and profile.profile_photo.name:
+                url = profile.profile_photo.url
+                if request:
+                    return request.build_absolute_uri(url)
+                return url
+            return profile.profile_photo_url
+        except Exception:
+            return None
+
+    def get_verification_status(self, obj):
+        try:
+            return obj.identity_verification.verification_status
+        except IdentityVerification.DoesNotExist:
+            return IdentityVerification.NOT_SUBMITTED

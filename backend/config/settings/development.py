@@ -5,6 +5,9 @@ ALLOWED_HOSTS = ['*']
 
 OTP_DEV_MODE = True  # Include OTP in API response — avoids SMS gateway in dev
 
+# Allow requests from any device on the LAN (simulator, emulator, physical phone)
+CORS_ALLOW_ALL_ORIGINS = True
+
 # Uses Gmail SMTP from base.py — OTP_DEV_MODE returns the code in the API response too
 
 # Fallback to local memory cache if Redis is not running

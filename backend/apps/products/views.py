@@ -4,27 +4,76 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import ListAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+
+ALLOWED_PRODUCT_IMAGE_TYPES = {
+    'image/jpeg', 'image/jpg', 'image/png',
+    'image/webp', 'image/heic', 'image/heif',
+}
+MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024   # 10 MB
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.models import IdentityVerification
 from .models import AvailabilityBlock, Category, Product, ProductImage
 from .serializers import (
     AvailabilityBlockSerializer,
     CategorySerializer,
+    CategoryWriteSerializer,
     ProductImageUploadSerializer,
     ProductSerializer,
     ProductWriteSerializer,
 )
 
 
-class CategoryListView(ListAPIView):
-    serializer_class = CategorySerializer
-    permission_classes = [AllowAny]
+class CategoryListCreateView(ListCreateAPIView):
     pagination_class = None
+
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAdminUser()]
+
+    def get_serializer_class(self):
+        return CategorySerializer
 
     def get_queryset(self):
         return Category.objects.filter(parent__isnull=True).prefetch_related('children')
+
+    def create(self, request, *args, **kwargs):
+        serializer = CategoryWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = serializer.save()
+        return Response(CategorySerializer(category).data, status=status.HTTP_201_CREATED)
+
+
+class CategoryDetailView(RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAdminUser]
+    queryset = Category.objects.prefetch_related('children')
+
+    def get_serializer_class(self):
+        return CategoryWriteSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(CategorySerializer(self.get_object()).data)
+
+    def update(self, request, *args, **kwargs):
+        category = self.get_object()
+        serializer = CategoryWriteSerializer(category, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        category.refresh_from_db()
+        return Response(CategorySerializer(category).data)
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.products.exists():
+            return Response(
+                {'error': 'Cannot delete a category that has active products.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        category.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProductListCreateView(ListCreateAPIView):
@@ -49,6 +98,7 @@ class ProductListCreateView(ListCreateAPIView):
         max_price = self.request.query_params.get('max_price')
         condition = self.request.query_params.get('condition')
 
+        owner = self.request.query_params.get('owner')
         if search:
             qs = qs.filter(Q(title__icontains=search) | Q(description__icontains=search))
         if category:
@@ -59,10 +109,25 @@ class ProductListCreateView(ListCreateAPIView):
             qs = qs.filter(price_per_day__lte=int(max_price))
         if condition:
             qs = qs.filter(condition=condition)
+        if owner:
+            qs = qs.filter(owner__id=owner)
 
         return qs.order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
+        # Only identity-verified users may publish listings.
+        try:
+            iv = request.user.identity_verification
+            verified = iv.verification_status == IdentityVerification.VERIFIED
+        except IdentityVerification.DoesNotExist:
+            verified = False
+
+        if not verified:
+            return Response(
+                {'error': 'You must complete identity verification before publishing a listing. Visit your profile to submit documents for review.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = ProductWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         product = serializer.save(owner=request.user)
@@ -127,6 +192,17 @@ class ProductImageView(APIView):
 
         image_file = serializer.validated_data['image']
         is_primary = serializer.validated_data['is_primary']
+
+        if image_file.content_type not in ALLOWED_PRODUCT_IMAGE_TYPES:
+            return Response(
+                {'error': 'Unsupported image format. Allowed: JPEG, PNG, WebP, HEIC.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if image_file.size > MAX_PRODUCT_IMAGE_BYTES:
+            return Response(
+                {'error': 'Image must be under 10 MB.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         path = default_storage.save(f'products/{pk}/{image_file.name}', image_file)
         image_url = request.build_absolute_uri(settings.MEDIA_URL + path)

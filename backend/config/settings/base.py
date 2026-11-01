@@ -25,6 +25,7 @@ THIRD_PARTY_APPS = [
     'storages',
     'drf_spectacular',
     'django_celery_beat',
+    'channels',
 ]
 
 LOCAL_APPS = [
@@ -182,3 +183,12 @@ OTP_DEV_MODE = False               # Overridden to True in development.py
 # Only this account may approve or reject verification requests.
 # Override via env var VERIFICATION_ADMIN_EMAIL for non-default deployments.
 VERIFICATION_ADMIN_EMAIL = config('VERIFICATION_ADMIN_EMAIL', default='paudeldinesh961@gmail.com')
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [REDIS_URL],
+        },
+    },
+}

@@ -17,7 +17,7 @@ BOOKING_STATUS_CHOICES = [
 ]
 
 ALLOWED_TRANSITIONS = {
-    'pending_approval': ['approved', 'cancelled_by_owner', 'expired'],
+    'pending_approval': ['approved', 'cancelled_by_renter', 'cancelled_by_owner', 'expired'],
     'approved': ['payment_pending', 'cancelled_by_renter', 'expired'],
     'payment_pending': ['confirmed', 'approved'],
     'confirmed': ['active', 'cancelled_by_renter', 'cancelled_by_owner'],
@@ -97,3 +97,47 @@ class BookingStatusHistory(models.Model):
 
     def __str__(self):
         return f'History({self.booking_id}, {self.status})'
+
+
+FREE_CANCELLATION_WINDOW_MINUTES = 60
+CANCELLATION_PENALTY_PERCENT = 5
+
+
+class CancellationPenalty(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_PAID = 'paid'
+    STATUS_WAIVED = 'waived'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PAID, 'Paid'),
+        (STATUS_WAIVED, 'Waived'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    booking = models.OneToOneField(
+        Booking,
+        on_delete=models.PROTECT,
+        related_name='cancellation_penalty',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='cancellation_penalties',
+    )
+    amount = models.PositiveIntegerField(help_text='NPR — 5% of booking rental_total')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    gateway_ref = models.CharField(max_length=255, blank=True, default='', db_index=True)
+    gateway_txn_id = models.CharField(max_length=255, unique=True, null=True, blank=True)
+
+    class Meta:
+        db_table = 'cancellation_penalties'
+
+    def __str__(self):
+        return f'CancellationPenalty({str(self.id)[:8]}, {self.amount} NPR, {self.status})'

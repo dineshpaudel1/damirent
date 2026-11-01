@@ -20,12 +20,13 @@ from .serializers import (
     SendOTPSerializer, VerifyOTPSerializer, PasswordResetConfirmSerializer,
     PushTokenSerializer, PublicUserSerializer,
     IdentityVerificationStatusSerializer, VerificationAdminListSerializer,
+    UserAdminSerializer,
 )
 
 # ── File upload constraints ───────────────────────────────────────────────────
 
-ALLOWED_PHOTO_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
-ALLOWED_DOC_TYPES = {'image/jpeg', 'image/png', 'application/pdf'}
+ALLOWED_PHOTO_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'}
+ALLOWED_DOC_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024   # 5 MB
 MAX_DOC_BYTES = 10 * 1024 * 1024    # 10 MB
 
@@ -67,14 +68,12 @@ def send_otp_email(email: str, otp: str, purpose: str) -> None:
 
 
 def is_verification_admin(user) -> bool:
-    """Check whether `user` is the designated verification administrator.
+    """Check whether `user` is a staff/superuser.
 
-    The authorised email is defined in settings.VERIFICATION_ADMIN_EMAIL.
-    This check is always performed on the backend; client-supplied claims are
-    ignored.
+    Staff status is set via Django admin or management commands — never from
+    client-supplied claims.
     """
-    admin_email = getattr(settings, 'VERIFICATION_ADMIN_EMAIL', '')
-    return bool(admin_email) and user.email == admin_email
+    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
 
 
 def _serve_document(doc_field):
@@ -338,7 +337,7 @@ class ProfilePhotoView(APIView):
 
         if photo.content_type not in ALLOWED_PHOTO_TYPES:
             return Response(
-                {'error': 'Invalid file type. Allowed: JPEG, PNG, WEBP.'},
+                {'error': 'Invalid file type. Allowed: JPEG, PNG, WEBP, HEIC.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -348,11 +347,14 @@ class ProfilePhotoView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        profile = request.user.profile
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
         # Remove the previous photo file to prevent orphaned files
         if profile.profile_photo and profile.profile_photo.name:
-            profile.profile_photo.delete(save=False)
+            try:
+                profile.profile_photo.delete(save=False)
+            except Exception:
+                pass  # Stale file reference — safe to ignore
 
         profile.profile_photo = photo
         profile.save(update_fields=['profile_photo'])
@@ -361,9 +363,15 @@ class ProfilePhotoView(APIView):
         return Response({'avatar': avatar_url}, status=status.HTTP_200_OK)
 
     def delete(self, request):
-        profile = request.user.profile
+        try:
+            profile = request.user.profile
+        except UserProfile.RelatedObjectDoesNotExist:
+            return Response(status=status.HTTP_204_NO_CONTENT)
         if profile.profile_photo and profile.profile_photo.name:
-            profile.profile_photo.delete(save=False)
+            try:
+                profile.profile_photo.delete(save=False)
+            except Exception:
+                pass
             profile.profile_photo = None
             profile.save(update_fields=['profile_photo'])
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -408,7 +416,7 @@ class IdentityVerificationView(APIView):
                 return Response(
                     {
                         'error': 'Validation failed.',
-                        'field_errors': {key: [f'{label} document must be JPEG, PNG, or PDF.']},
+                        'field_errors': {key: [f'{label} document must be JPEG, PNG, HEIC, WebP, or PDF.']},
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
@@ -584,3 +592,55 @@ class AdminDocumentView(APIView):
             )
 
         return file_response
+
+
+# ── Admin: user management ────────────────────────────────────────────────────
+
+class UserAdminListView(APIView):
+    """List all users with their verification status. Staff-only."""
+
+    def get(self, request):
+        if not is_verification_admin(request.user):
+            return Response(
+                {'error': 'You are not authorized to perform this action.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from django.db.models import Q
+        qs = User.objects.select_related('profile', 'identity_verification').order_by('-date_joined')
+
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(Q(email__icontains=search) | Q(full_name__icontains=search))
+
+        from rest_framework.pagination import PageNumberPagination
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        page = paginator.paginate_queryset(qs, request)
+        serializer = UserAdminSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
+
+class StaffToggleView(APIView):
+    """Grant or revoke staff (superuser) status for a user. Staff-only."""
+
+    def post(self, request, user_id):
+        if not is_verification_admin(request.user):
+            return Response(
+                {'error': 'You are not authorized to perform this action.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = get_object_or_404(User, pk=user_id)
+
+        if user == request.user:
+            return Response(
+                {'error': 'You cannot modify your own staff status.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.is_staff = not user.is_staff
+        user.save(update_fields=['is_staff'])
+
+        action = 'granted' if user.is_staff else 'revoked'
+        return Response({'is_staff': user.is_staff, 'message': f'Staff access {action} for {user.email}.'})

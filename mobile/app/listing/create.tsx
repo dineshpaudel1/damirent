@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productService } from '@/services/product.service';
+import { useAuthStore } from '@/store/auth.store';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
@@ -36,6 +37,47 @@ const THUMB_SIZE = 88;
 export default function CreateListingScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+
+  // Gate: require identity verification before listing
+  const verificationStatus = user?.identity_verification?.verification_status;
+  const isVerified = verificationStatus === 'verified';
+
+  if (!isVerified) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.header}>
+          <Pressable style={styles.backBtn} onPress={() => router.back()} hitSlop={8}>
+            <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+          </Pressable>
+          <Text style={styles.headerTitle}>List an item</Text>
+          <View style={{ width: 36 }} />
+        </View>
+        <View style={gateStyles.wrap}>
+          <View style={gateStyles.iconWrap}>
+            <Ionicons name="shield-checkmark-outline" size={48} color={Colors.primary} />
+          </View>
+          <Text style={gateStyles.title}>Verification required</Text>
+          <Text style={gateStyles.body}>
+            {verificationStatus === 'pending'
+              ? 'Your identity documents are under review. You will be able to publish listings once our team verifies your account.'
+              : verificationStatus === 'rejected'
+              ? 'Your previous verification was rejected. Please re-submit your documents from your profile page.'
+              : 'To publish listings you must verify your identity. It only takes a few minutes.'}
+          </Text>
+          <Pressable
+            style={gateStyles.btn}
+            onPress={() => router.replace('/profile/verification')}
+          >
+            <Ionicons name="arrow-forward-circle-outline" size={18} color={Colors.textInverse} />
+            <Text style={gateStyles.btnText}>
+              {verificationStatus === 'pending' ? 'View verification status' : 'Start verification'}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -45,7 +87,7 @@ export default function CreateListingScreen() {
   const [pickupLocation, setPickupLocation] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [categoryOpen, setCategoryOpen] = useState(false);
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<Array<{ uri: string; mimeType: string }>>([]);
   const [uploading, setUploading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -66,8 +108,11 @@ export default function CreateListingScreen() {
       selectionLimit: MAX_IMAGES - images.length,
     });
     if (!result.canceled) {
-      const uris = result.assets.map((a) => a.uri);
-      setImages((prev) => [...prev, ...uris].slice(0, MAX_IMAGES));
+      const picked = result.assets.map((a) => ({
+        uri: a.uri,
+        mimeType: a.mimeType ?? 'image/jpeg',
+      }));
+      setImages((prev) => [...prev, ...picked].slice(0, MAX_IMAGES));
     }
   }
 
@@ -87,7 +132,12 @@ export default function CreateListingScreen() {
         setUploading(true);
         try {
           for (let i = 0; i < images.length; i++) {
-            await productService.uploadProductImage(product.id, images[i], i === 0);
+            await productService.uploadProductImage(
+              product.id,
+              images[i].uri,
+              i === 0,
+              images[i].mimeType,
+            );
           }
         } finally {
           setUploading(false);
@@ -156,9 +206,9 @@ export default function CreateListingScreen() {
           <FormSection title="Photos" hint={`${images.length} / ${MAX_IMAGES}`}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.imageRow}>
-                {images.map((uri, index) => (
-                  <View key={uri} style={styles.thumb}>
-                    <Image source={{ uri }} style={styles.thumbImg} />
+                {images.map((img, index) => (
+                  <View key={img.uri} style={styles.thumb}>
+                    <Image source={{ uri: img.uri }} style={styles.thumbImg} />
                     {index === 0 && (
                       <View style={styles.primaryBadge}>
                         <Text style={styles.badgeText}>Primary</Text>
@@ -166,7 +216,7 @@ export default function CreateListingScreen() {
                     )}
                     <Pressable
                       style={styles.removeBtn}
-                      onPress={() => setImages((p) => p.filter((u) => u !== uri))}
+                      onPress={() => setImages((p) => p.filter((i) => i.uri !== img.uri))}
                     >
                       <Ionicons name="close" size={11} color="#fff" />
                     </Pressable>
@@ -317,8 +367,9 @@ export default function CreateListingScreen() {
 
       {/* ── Category modal ────────────────────────────────── */}
       <Modal visible={categoryOpen} transparent animationType="slide">
-        <Pressable style={styles.modalOverlay} onPress={() => setCategoryOpen(false)} />
-        <View style={[styles.modalSheet, { paddingBottom: insets.bottom + Spacing.base }]}>
+        <View style={styles.modalContainer}>
+          <Pressable style={styles.modalOverlay} onPress={() => setCategoryOpen(false)} />
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + Spacing.base }]}>
           <View style={styles.modalHandle} />
           <Text style={styles.modalTitle}>Select category</Text>
           <FlatList
@@ -340,6 +391,7 @@ export default function CreateListingScreen() {
             }}
             ItemSeparatorComponent={() => <View style={styles.modalSep} />}
           />
+          </View>
         </View>
       </Modal>
     </View>
@@ -604,7 +656,14 @@ const styles = StyleSheet.create({
   },
 
   // ── Category modal ──────────────────────────────────────
-  modalOverlay: { flex: 1, backgroundColor: Colors.overlay },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: Colors.overlay,
+  },
   modalSheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: Radius['2xl'],
@@ -643,4 +702,52 @@ const styles = StyleSheet.create({
     color: Colors.primary,
   },
   modalSep: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.border },
+});
+
+// ── Verification gate styles ─────────────────────────────────────────────────
+const gateStyles = StyleSheet.create({
+  wrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing['2xl'],
+    gap: Spacing.md,
+  },
+  iconWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primarySurface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.sm,
+  },
+  title: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.fontSize['2xl'],
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  body: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.fontSize.base,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: Typography.fontSize.base * 1.6,
+  },
+  btn: {
+    marginTop: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+  },
+  btnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.fontSize.base,
+    color: Colors.textInverse,
+  },
 });

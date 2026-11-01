@@ -3,6 +3,7 @@ import {
   Alert,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,10 +12,11 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/store/auth.store';
+import { authService } from '@/services/auth.service';
 import { Colors, Typography, Spacing, Radius, Shadow } from '@/constants/theme';
 
-const VERIFICATION_ADMIN_EMAIL = 'paudeldinesh961@gmail.com';
 
 // ── Verified badge ────────────────────────────────────────────────────────────
 
@@ -124,8 +126,16 @@ function StatItem({
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
-  const { user, logout } = useAuthStore();
+  const { user: cachedUser, logout } = useAuthStore();
   const insets = useSafeAreaInsets();
+
+  // Fetch fresh profile data — auth store has stale snapshot from login
+  const { data: freshUser, isRefetching, refetch } = useQuery({
+    queryKey: ['me'],
+    queryFn: authService.getMe,
+    initialData: cachedUser ?? undefined,
+    staleTime: 0, // always revalidate on focus
+  });
 
   function handleLogout() {
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
@@ -138,6 +148,7 @@ export default function ProfileScreen() {
     ]);
   }
 
+  const user = freshUser ?? cachedUser;
   if (!user) return null;
 
   const profile = user.profile;
@@ -145,15 +156,15 @@ export default function ProfileScreen() {
   const renterRating = profile ? parseFloat(profile.avg_renter_rating) : 0;
   const listingCount = profile?.total_listings ?? 0;
   const rentalCount = profile?.total_rentals ?? 0;
+  const reviewCount = profile?.review_count ?? 0;
   const initial = user.full_name.charAt(0).toUpperCase();
 
   // Identity verification — trusted from backend data only
   const ivStatus = user.identity_verification?.verification_status ?? 'not_submitted';
   const isIdentityVerified = ivStatus === 'verified';
 
-  // Admin dashboard is only shown for the designated admin account.
-  // The actual enforcement is on the backend; this is only a UI hint.
-  const isAdmin = user.email === VERIFICATION_ADMIN_EMAIL;
+  // Admin dashboard — shown only to staff users (is_staff set by backend).
+  const isAdmin = user.is_staff === true;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -177,6 +188,13 @@ export default function ProfileScreen() {
           styles.content,
           { paddingBottom: insets.bottom + Spacing['3xl'] },
         ]}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={() => { void refetch(); }}
+            tintColor={Colors.primary}
+          />
+        }
       >
 
         {/* ── Hero card ───────────────────────────────────── */}
@@ -228,6 +246,13 @@ export default function ProfileScreen() {
               label="Rentals"
               icon="repeat-outline"
               iconColor={Colors.secondary}
+            />
+            <View style={styles.statDivider} />
+            <StatItem
+              value={reviewCount}
+              label="Reviews"
+              icon="chatbubble-outline"
+              iconColor={Colors.primary}
             />
             <View style={styles.statDivider} />
             <StatItem
@@ -309,17 +334,17 @@ export default function ProfileScreen() {
           />
         </View>
 
-        {/* ── Admin section (only for paudeldinesh961@gmail.com) ─── */}
+        {/* ── Super Admin section (staff users only) ─── */}
         {isAdmin && (
           <>
-            <SectionLabel label="Administration" />
+            <SectionLabel label="Super Admin" />
             <View style={[styles.menuCard, Shadow.sm]}>
               <MenuRow
-                icon="people-outline"
-                iconBg={Colors.warningSurface}
-                iconColor={Colors.warning}
-                label="Verification dashboard"
-                sublabel="Review pending identity submissions"
+                icon="shield-checkmark-outline"
+                iconBg={Colors.primarySurface}
+                iconColor={Colors.primary}
+                label="Admin dashboard"
+                sublabel="Verify users & manage staff access"
                 onPress={() => router.push('/admin/verification-dashboard')}
               />
             </View>

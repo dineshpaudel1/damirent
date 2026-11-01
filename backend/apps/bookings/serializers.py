@@ -1,7 +1,15 @@
 from rest_framework import serializers
 
 from apps.products.serializers import ProductSerializer, PublicUserSerializer
-from .models import Booking, BookingStatusHistory
+from .models import Booking, BookingStatusHistory, CancellationPenalty
+
+
+class CancellationPenaltySerializer(serializers.ModelSerializer):
+    booking_id = serializers.UUIDField(source='booking_id', read_only=True)
+
+    class Meta:
+        model = CancellationPenalty
+        fields = ['id', 'booking_id', 'amount', 'status', 'created_at', 'paid_at']
 
 
 class BookingStatusHistorySerializer(serializers.ModelSerializer):
@@ -18,6 +26,7 @@ class BookingSerializer(serializers.ModelSerializer):
     renter = PublicUserSerializer(read_only=True)
     message = serializers.CharField(source='renter_message')
     owner_note = serializers.SerializerMethodField()
+    cancellation_penalty = CancellationPenaltySerializer(read_only=True)
 
     class Meta:
         model = Booking
@@ -26,6 +35,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'start_date', 'end_date', 'total_days',
             'rental_total', 'platform_fee', 'security_deposit', 'total_charged',
             'status', 'message', 'owner_note',
+            'cancellation_penalty',
             'created_at', 'updated_at',
         ]
 

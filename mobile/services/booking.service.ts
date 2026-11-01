@@ -1,6 +1,7 @@
 import api from './api';
 import type {
   Booking,
+  CancellationPenalty,
   CreateBookingRequest,
   BookingStatusHistory,
   Payment,
@@ -74,6 +75,16 @@ export const bookingService = {
 
   async getPaymentStatus(bookingId: string): Promise<Payment> {
     const res = await api.get(`/payments/${bookingId}/`);
+    return res.data;
+  },
+
+  async listMyPenalties(): Promise<CancellationPenalty[]> {
+    const res = await api.get('/bookings/penalties/');
+    return res.data;
+  },
+
+  async initiatePenaltyPayment(penaltyId: string): Promise<{ payment_url: string; pidx: string }> {
+    const res = await api.post(`/payments/penalty/${penaltyId}/initiate/`);
     return res.data;
   },
 

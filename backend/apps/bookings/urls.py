@@ -9,6 +9,7 @@ from .views import (
     BookingActivateView,
     BookingConfirmReturnView,
     BookingDisputeView,
+    CancellationPenaltyListView,
 )
 
 urlpatterns = [
@@ -21,4 +22,5 @@ urlpatterns = [
     path('<uuid:pk>/activate/', BookingActivateView.as_view(), name='booking-activate'),
     path('<uuid:pk>/confirm-return/', BookingConfirmReturnView.as_view(), name='booking-confirm-return'),
     path('<uuid:pk>/dispute/', BookingDisputeView.as_view(), name='booking-dispute'),
+    path('penalties/', CancellationPenaltyListView.as_view(), name='penalty-list'),
 ]

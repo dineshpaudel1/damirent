@@ -1,15 +1,34 @@
 from datetime import date
 
 from django.conf import settings
+from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.models import IdentityVerification
 from apps.products.models import AvailabilityBlock, Product
-from .models import Booking, BookingStatusHistory, ALLOWED_TRANSITIONS
-from .serializers import BookingSerializer, BookingCreateSerializer, BookingStatusHistorySerializer
+from services.notification_service import (
+    notify_booking_request,
+    notify_booking_approved,
+    notify_booking_rejected,
+    notify_booking_cancelled_to_owner,
+    notify_booking_cancelled_to_renter,
+    notify_booking_active,
+    notify_booking_completed,
+    notify_booking_disputed,
+)
+from .models import (
+    Booking, BookingStatusHistory, CancellationPenalty,
+    ALLOWED_TRANSITIONS, FREE_CANCELLATION_WINDOW_MINUTES, CANCELLATION_PENALTY_PERCENT,
+)
+from .serializers import (
+    BookingSerializer, BookingCreateSerializer, BookingStatusHistorySerializer,
+    CancellationPenaltySerializer,
+)
 
 
 def _record_transition(booking, new_status, changed_by, note=''):
@@ -61,6 +80,43 @@ class BookingListCreateView(APIView):
         return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
+        # ── Check 1: Identity verification ───────────────────────────────────
+        try:
+            iv = request.user.identity_verification
+            iv_status = iv.verification_status
+        except IdentityVerification.DoesNotExist:
+            iv_status = IdentityVerification.NOT_SUBMITTED
+
+        if iv_status != IdentityVerification.VERIFIED:
+            detail = {
+                IdentityVerification.NOT_SUBMITTED: 'You must complete identity verification before booking. Visit your profile to submit documents for review.',
+                IdentityVerification.PENDING: 'Your identity verification is pending admin approval. You can book products once your account has been verified.',
+                IdentityVerification.REJECTED: 'Your identity verification was rejected. Please review the feedback, update your documents, and resubmit.',
+            }.get(iv_status, 'Identity verification required.')
+            return Response(
+                {'error': detail, 'verification_status': iv_status},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ── Check 2: Outstanding cancellation penalties ───────────────────────
+        outstanding = CancellationPenalty.objects.filter(
+            user=request.user,
+            status=CancellationPenalty.STATUS_PENDING,
+        ).select_related('booking', 'booking__product').first()
+        if outstanding:
+            return Response(
+                {
+                    'error': (
+                        f'You cannot make a new booking because you have an outstanding '
+                        f'cancellation penalty of NPR {outstanding.amount}. '
+                        f'Please clear the pending amount before booking another product.'
+                    ),
+                    'penalty_id': str(outstanding.id),
+                    'penalty_amount': outstanding.amount,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = BookingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -129,6 +185,7 @@ class BookingListCreateView(APIView):
         )
 
         booking.refresh_from_db()
+        notify_booking_request(booking)
         return Response(
             BookingSerializer(booking).data,
             status=status.HTTP_201_CREATED,
@@ -177,6 +234,7 @@ class BookingApproveView(APIView):
         if err:
             return err
         booking.refresh_from_db()
+        notify_booking_approved(booking)
         return Response(BookingSerializer(booking).data)
 
 
@@ -190,10 +248,19 @@ class BookingRejectView(APIView):
         if err:
             return err
         booking.refresh_from_db()
+        notify_booking_rejected(booking)
         return Response(BookingSerializer(booking).data)
 
 
 class BookingCancelView(APIView):
+    """
+    Cancel a booking.
+
+    Renter cancellations after the FREE_CANCELLATION_WINDOW_MINUTES grace period
+    incur a penalty of CANCELLATION_PENALTY_PERCENT % of rental_total.
+    The penalty is stored in CancellationPenalty and must be paid before the
+    renter can create another booking.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
@@ -207,11 +274,38 @@ class BookingCancelView(APIView):
         else:
             return Response({'error': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        err = _record_transition(booking, new_status, request.user, note=reason)
-        if err:
-            return err
-        booking.refresh_from_db()
-        return Response(BookingSerializer(booking).data)
+        # Pre-calculate penalty for renter cancellations (uses immutable created_at)
+        penalty_amount = 0
+        if new_status == 'cancelled_by_renter':
+            elapsed_minutes = (timezone.now() - booking.created_at).total_seconds() / 60
+            if elapsed_minutes > FREE_CANCELLATION_WINDOW_MINUTES:
+                penalty_amount = booking.rental_total * CANCELLATION_PENALTY_PERCENT // 100
+
+        with transaction.atomic():
+            # Lock the booking row to prevent concurrent cancellations
+            booking_locked = Booking.objects.select_for_update().get(pk=pk)
+
+            err = _record_transition(booking_locked, new_status, request.user, note=reason)
+            if err:
+                return err
+
+            # Idempotent: create penalty only if none exists for this booking
+            if penalty_amount > 0:
+                CancellationPenalty.objects.get_or_create(
+                    booking=booking_locked,
+                    defaults={
+                        'user': request.user,
+                        'amount': penalty_amount,
+                        'status': CancellationPenalty.STATUS_PENDING,
+                    },
+                )
+
+        booking_locked.refresh_from_db()
+        if new_status == 'cancelled_by_renter':
+            notify_booking_cancelled_to_owner(booking_locked)
+        elif new_status == 'cancelled_by_owner':
+            notify_booking_cancelled_to_renter(booking_locked)
+        return Response(BookingSerializer(booking_locked).data)
 
 
 class BookingActivateView(APIView):
@@ -224,6 +318,7 @@ class BookingActivateView(APIView):
         if err:
             return err
         booking.refresh_from_db()
+        notify_booking_active(booking)
         return Response(BookingSerializer(booking).data)
 
 
@@ -236,6 +331,7 @@ class BookingConfirmReturnView(APIView):
         if err:
             return err
         booking.refresh_from_db()
+        notify_booking_completed(booking)
         return Response(BookingSerializer(booking).data)
 
 
@@ -251,4 +347,19 @@ class BookingDisputeView(APIView):
         if err:
             return err
         booking.refresh_from_db()
+        notify_booking_disputed(booking, filed_by=request.user)
         return Response(BookingSerializer(booking).data)
+
+
+class CancellationPenaltyListView(APIView):
+    """List the current user's cancellation penalties."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        penalties = (
+            CancellationPenalty.objects
+            .filter(user=request.user)
+            .select_related('booking', 'booking__product')
+            .order_by('-created_at')
+        )
+        return Response(CancellationPenaltySerializer(penalties, many=True).data)
